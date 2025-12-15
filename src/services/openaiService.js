@@ -69,7 +69,6 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
             const defaultDuration = persona.appointmentSettings?.defaultDuration || 30;
             const bufferTime = persona.appointmentSettings?.bufferTime || 5;
 
-            console.log(defaultDuration, bufferTime);
             systemPrompt = `You are ${persona.botName}. 
       Your tone is ${persona.toneDescription}. 
       
@@ -287,7 +286,6 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
 async function bookAppointment(dateTime, serviceName, customerPhone, notes) {
     try {
         const contact = await Contact.findOne({ phoneNumber: customerPhone });
-        console.log('booked');
         if (!contact) {
             throw new Error("Contact not found for booking");
         }

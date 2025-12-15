@@ -94,6 +94,7 @@ exports.handleMessage = async (req, res) => {
 
                     // 3. Emit SSE Event (User Message)
                     sseManager.sendEvent('NEW_MESSAGE', {
+                        _id: userMsg._id,
                         contactId: contact._id,
                         phoneNumber: from,
                         role: 'user',
@@ -162,6 +163,7 @@ exports.handleMessage = async (req, res) => {
 
                         // Emit SSE Event (Assistant Message)
                         sseManager.sendEvent('NEW_MESSAGE', {
+                            _id: aiMsg._id,
                             contactId: contact._id,
                             phoneNumber: from,
                             role: 'assistant',
