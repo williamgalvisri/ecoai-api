@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const Appointment = require('../models/Appointment');
+const ChatHistory = require('../models/ChatHistory');
 const ClientPersona = require('../models/ClientPersona');
-const Contact = require('../models/Contact');
 const axios = require('axios');
 
 const setupReminderJob = () => {
@@ -65,12 +65,21 @@ const setupReminderJob = () => {
                     // We need PHONE_NUMBER_ID and WHATSAPP_TOKEN
                     await sendWhatsAppMessage(phone, message);
 
+                    // Add to Chat History using 'assistant' role so AI sees it
+                    await ChatHistory.create({
+                        phoneNumber: phone,
+                        role: 'assistant',
+                        content: message,
+                        timestamp: new Date()
+                    });
+
                     // Update Flag
                     apt.reminderSent = true;
                     await apt.save();
                     console.log(`Reminder sent for appointment ${apt._id}`);
                 }
             }
+
 
         } catch (error) {
             console.error('Error in reminder job:', error);

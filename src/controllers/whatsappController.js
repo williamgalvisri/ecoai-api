@@ -39,6 +39,36 @@ exports.handleMessage = async (req, res) => {
                 const from = messageObject.from; // Phone number
                 const msgBody = messageObject.text?.body; // Text message content
 
+                // BLOCK NON-TEXT MEDIA
+                if (messageObject.type !== 'text') {
+                    console.log(`Blocking non-text media: ${messageObject.type}`);
+
+                    // 1. Reply to user
+                    await axios({
+                        method: 'POST',
+                        url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+                        headers: {
+                            'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                            'Content-Type': 'application/json',
+                        },
+                        data: {
+                            messaging_product: 'whatsapp',
+                            to: from,
+                            text: { body: "Disculpa, por el momento solo puedo leer mensajes de texto. Por favor escríbeme lo que necesitas." },
+                        },
+                    });
+
+                    // 2. Log attempt
+                    await ChatHistory.create({
+                        phoneNumber: from,
+                        role: 'system',
+                        content: `[User sent unsupported media: ${messageObject.type}]`
+                    });
+
+                    // Stop processing
+                    return res.success(null, 'MEDIA_BLOCKED');
+                }
+
                 // Only handle text messages for now
                 if (msgBody) {
 
