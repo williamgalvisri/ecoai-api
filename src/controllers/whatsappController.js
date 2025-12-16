@@ -4,6 +4,8 @@ const ChatHistory = require('../models/ChatHistory');
 const Contact = require('../models/Contact');
 const ClientPersona = require('../models/ClientPersona');
 const sseManager = require('../utils/sseManager');
+const { UnauthorizedError, InternalError } = require('../utils/ApiResponse');
+const { default: mongoose } = require('mongoose');
 
 // Verify Webhook
 exports.verifyWebhook = (req, res) => {
@@ -12,7 +14,8 @@ exports.verifyWebhook = (req, res) => {
     const challenge = req.query['hub.challenge'];
 
     if (mode && token) {
-        if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+        const persona = ClientPersona.findOne({ _id: mongoose.Types.ObjectId(token) });
+        if (mode === 'subscribe' && token === persona._id.toString()) {
             console.log('WEBHOOK_VERIFIED');
             res.status(200).send(challenge);
         } else {
@@ -25,7 +28,6 @@ exports.verifyWebhook = (req, res) => {
 exports.handleMessage = async (req, res) => {
     try {
         const body = req.body;
-
         if (body.object === 'whatsapp_business_account') {
             if (
                 body.entry &&
@@ -37,62 +39,59 @@ exports.handleMessage = async (req, res) => {
                 const messageObject = body.entry[0].changes[0].value.messages[0];
                 const phoneNumberId = body.entry[0].changes[0].value.metadata.phone_number_id;
                 const from = messageObject.from; // Phone number
-                const msgBody = messageObject.text?.body; // Text message content
+                let msgBody = messageObject.text?.body; // Text message content
+
+                const persona = await ClientPersona.findOne({ "whatsappBussinesConfig.phoneNumberId": phoneNumberId });
+
+                if (!persona) {
+                    return res.error(new InternalError('persona not found'));
+                }
+
+                // 1. Identify/Create Contact or Update
+                let contact = await Contact.findOne({ phoneNumber: from });
+                if (!contact) {
+                    contact = await Contact.create({ phoneNumber: from, lastInteraction: new Date() });
+                } else {
+                    // Update existing contact's last interaction
+                    contact = await Contact.findByIdAndUpdate(
+                        contact._id,
+                        { lastInteraction: new Date() },
+                        { new: true }
+                    );
+                }
 
                 // BLOCK NON-TEXT MEDIA
                 if (messageObject.type !== 'text') {
                     console.log(`Blocking non-text media: ${messageObject.type}`);
 
+                    const messageDefaultFail = "Disculpa, por el momento solo puedo leer mensajes de texto. Por favor escríbeme lo que necesitas.";
                     // 1. Reply to user
                     await axios({
                         method: 'POST',
                         url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
                         headers: {
-                            'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                            'Authorization': `Bearer ${persona.whatsappBussinesConfig.token}`,
                             'Content-Type': 'application/json',
                         },
                         data: {
                             messaging_product: 'whatsapp',
                             to: from,
-                            text: { body: "Disculpa, por el momento solo puedo leer mensajes de texto. Por favor escríbeme lo que necesitas." },
+                            text: { body: messageDefaultFail },
                         },
                     });
 
-                    // 2. Log attempt
-                    await ChatHistory.create({
-                        phoneNumber: from,
-                        role: 'system',
-                        content: `[User sent unsupported media: ${messageObject.type}]`
-                    });
+                    msgBody = 'Content blocked';
 
-                    // Stop processing
-                    return res.success(null, 'MEDIA_BLOCKED');
-                }
 
-                // Only handle text messages for now
-                if (msgBody) {
-
-                    // 1. Identify/Create Contact or Update
-                    let contact = await Contact.findOne({ phoneNumber: from });
-                    if (!contact) {
-                        contact = await Contact.create({ phoneNumber: from, lastInteraction: new Date() });
-                    } else {
-                        // Update existing contact's last interaction
-                        contact = await Contact.findByIdAndUpdate(
-                            contact._id,
-                            { lastInteraction: new Date() },
-                            { new: true }
-                        );
-                    }
-
-                    // 2. Save User Message
+                    // 1. Firts send message user
                     const userMsg = await ChatHistory.create({
                         phoneNumber: from,
                         role: 'user',
                         content: msgBody
                     });
 
-                    // 3. Emit SSE Event (User Message)
+
+                    // 2. Emit SSE Event (Ai Message)
                     sseManager.sendEvent('NEW_MESSAGE', {
                         _id: userMsg._id,
                         contactId: contact._id,
@@ -102,24 +101,69 @@ exports.handleMessage = async (req, res) => {
                         timestamp: userMsg.timestamp,
                     });
 
+                    // 2. Log attempt
+                    const systemMsg = await ChatHistory.create({
+                        phoneNumber: from,
+                        role: 'assistant',
+                        content: messageDefaultFail
+                    });
+
+                    // 3. Emit SSE Event (User Message)
+                    sseManager.sendEvent('NEW_MESSAGE', {
+                        _id: systemMsg._id,
+                        contactId: contact._id,
+                        phoneNumber: from,
+                        role: 'owner',
+                        content: messageDefaultFail,
+                        timestamp: systemMsg.timestamp,
+                    });
+
+
+
+
+
+                    // Stop processing
+                    return res.success(null, 'MEDIA_BLOCKED');
+                }
+
+                // Only handle text messages for now
+                if (msgBody) {
+
+                    // 2. Save User Message
+                    const userMsg = await ChatHistory.create({
+                        phoneNumber: from,
+                        role: 'user',
+                        content: msgBody
+                    });
+
+
+                    // 3. Emit SSE Event (User Message)
+                    sseManager.sendEvent('NEW_MESSAGE', {
+                        _id: userMsg._id,
+                        contactId: contact._id,
+                        phoneNumber: from,
+                        role: 'user',
+                        content: msgBody ?? 'N/A',
+                        timestamp: userMsg.timestamp,
+                    });
+
                     // 4. Check Bot Active Status
                     if (contact.isBotActive) {
                         // Generate AI Response
                         // TODO: Dynamic ownerId based on phoneNumberId or config
-                        const ownerId = "user_123_costa";
 
                         // Limit Check
-                        const persona = await ClientPersona.findOne({ ownerId });
+
                         // if (persona && persona.subscription.isActive) {
                         //     if (persona.usage.totalTokens >= persona.subscription.tokenLimit) {
-                        //         console.warn(`Token limit exceeded for owner ${ownerId}.`);
+                        //         console.warn(`Token limit exceeded for owner ${persona._id}.`);
                         //         // Optionally send a fallback message or just silence.
                         //         // sending fallback:
                         //         await axios({
                         //             method: 'POST',
                         //             url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
                         //             headers: {
-                        //                 'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                        //                 'Authorization': `Bearer ${persona.whatsappBussinesConfig.token}`,
                         //                 'Content-Type': 'application/json',
                         //             },
                         //             data: {
@@ -133,7 +177,7 @@ exports.handleMessage = async (req, res) => {
                         // }
 
                         // Call Service
-                        const { text: aiResponseText, usage } = await openaiService.generateResponse(from, msgBody, ownerId);
+                        const { text: aiResponseText, usage } = await openaiService.generateResponse(from, msgBody, persona._id);
 
                         // Save Assistant Response & Audit Log
                         const aiMsg = await ChatHistory.create({
@@ -176,7 +220,7 @@ exports.handleMessage = async (req, res) => {
                             method: 'POST',
                             url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
                             headers: {
-                                'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                                'Authorization': `Bearer ${persona.whatsappBussinesConfig.token}`,
                                 'Content-Type': 'application/json',
                             },
                             data: {

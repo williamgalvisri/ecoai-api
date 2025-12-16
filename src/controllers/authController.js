@@ -21,7 +21,8 @@ const login = async (req, res) => {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 businessPhone: user.phoneNumber,
-                photoUrl: user.photoUrl
+                photoUrl: user.photoUrl,
+                subscriptionPlan: user.subscription ? user.subscription.plan : 'basic'
             };
 
             res.json({

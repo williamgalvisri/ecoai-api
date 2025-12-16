@@ -1,10 +1,6 @@
 const mongoose = require('mongoose');
 
 const ClientPersonaSchema = new mongoose.Schema({
-    ownerId: {
-        type: String,
-        required: true,
-    },
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
     photoUrl: { type: String, default: '' },
@@ -75,6 +71,16 @@ const ClientPersonaSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
     },
+    whatsappBussinesConfig: {
+        token: {
+            type: String,
+            default: ''
+        },
+        phoneNumberId: {
+            type: String,
+            default: ''
+        }
+    }
 });
 
 module.exports = mongoose.model('ClientPersona', ClientPersonaSchema);

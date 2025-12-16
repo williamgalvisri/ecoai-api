@@ -63,7 +63,7 @@ const setupReminderJob = () => {
 
                     // Use WhatsApp API directly (or a helper if available)
                     // We need PHONE_NUMBER_ID and WHATSAPP_TOKEN
-                    await sendWhatsAppMessage(phone, message);
+                    await sendWhatsAppMessage(phone, message, persona.whatsappBussinesConfig.token, persona.whatsappBussinesConfig.phoneNumberId);
 
                     // Add to Chat History using 'assistant' role so AI sees it
                     await ChatHistory.create({
@@ -87,10 +87,7 @@ const setupReminderJob = () => {
     });
 };
 
-async function sendWhatsAppMessage(to, body) {
-    const token = process.env.WHATSAPP_TOKEN;
-    const phoneId = process.env.PHONE_NUMBER_ID;
-
+async function sendWhatsAppMessage(to, body, token, phoneId) {
     if (!token || !phoneId) {
         console.error("Missing WhatsApp credentials for reminder.");
         return;

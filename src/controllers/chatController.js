@@ -2,17 +2,28 @@ const axios = require('axios');
 const ChatHistory = require('../models/ChatHistory');
 const sseManager = require('../utils/sseManager');
 const Contact = require('../models/Contact');
+const ClientPersona = require('../models/ClientPersona');
 const { BadRequestError } = require('../utils/ApiResponse');
 
 exports.handleChat = async (req, res) => {
     try {
         const { message, userPhone } = req.body;
 
+        const clientPersonaId = req.user.clientPersonaId;
+        if (!clientPersonaId) {
+            return res.error(new BadRequestError('Client Persona ID is required.'));
+        }
+
         if (!message || !userPhone) {
             return res.error(new BadRequestError('Message and userPhone are required.'));
         }
 
-        const phoneNumberId = process.env.PHONE_NUMBER_ID;
+        const persona = await ClientPersona.findById(clientPersonaId);
+        if (!persona) {
+            return res.error(new BadRequestError('Client Persona not found.'));
+        }
+
+        const phoneNumberId = persona.whatsappBussinesConfig.phoneNumberId;
         if (!phoneNumberId) {
             console.error("Missing PHONE_NUMBER_ID in .env");
             return res.error(new BadRequestError('Server configuration error: Missing Phone Number ID.'));
@@ -26,7 +37,7 @@ exports.handleChat = async (req, res) => {
             method: 'POST',
             url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
             headers: {
-                'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
+                'Authorization': `Bearer ${persona.whatsappBussinesConfig.token}`,
                 'Content-Type': 'application/json',
             },
             data: {

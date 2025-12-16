@@ -25,7 +25,7 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
 
         // 2. Fetch Client Persona
         // Assuming ownerId is passed or determined upstream
-        const persona = await ClientPersona.findOne({ ownerId });
+        const persona = await ClientPersona.findOne({ _id: ownerId });
 
         if (!persona) {
             console.warn(`Persona not found for ownerId: ${ownerId}. Using fallback.`);
@@ -236,7 +236,7 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
                     },
                     bookAppointment: async (args) => {
                         console.log('running bookAppointment tool');
-                        return await bookAppointment(args.dateTime, args.serviceName, phoneNumber, args.notes);
+                        return await bookAppointment(args.dateTime, args.serviceName, phoneNumber, args.notes, persona);
                     },
                     updateContactName: async (args) => {
                         console.log('running updateContactName tool');
@@ -283,15 +283,12 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
 /**
  * Helper function to book an appointment.
  */
-async function bookAppointment(dateTime, serviceName, customerPhone, notes) {
+async function bookAppointment(dateTime, serviceName, customerPhone, notes, persona) {
     try {
         const contact = await Contact.findOne({ phoneNumber: customerPhone });
         if (!contact) {
             throw new Error("Contact not found for booking");
         }
-
-        const persona = await ClientPersona.findOne({});
-        const ownerId = persona ? persona._id : null;
 
         // Calculate endTime based on Service Duration
         let duration = persona?.appointmentSettings?.defaultDuration || 30;
@@ -311,7 +308,7 @@ async function bookAppointment(dateTime, serviceName, customerPhone, notes) {
 
         const newAppointment = new Appointment({
             contactId: contact._id,
-            ownerId: ownerId,
+            ownerId: persona._id,
             customerPhone,
             dateTime: startDate,
             endTime: endTime,

@@ -47,6 +47,12 @@ class InternalError extends ErrorResponse {
     }
 }
 
+class UnauthorizedError extends ErrorResponse {
+    constructor(message = 'Unauthorized') {
+        super(HttpStatus.UNAUTHORIZED, message);
+    }
+}
+
 module.exports = {
     ApiResponse,
     SuccessResponse,
@@ -54,5 +60,6 @@ module.exports = {
     ErrorResponse,
     NotFoundError,
     BadRequestError,
-    InternalError
+    InternalError,
+    UnauthorizedError
 };
