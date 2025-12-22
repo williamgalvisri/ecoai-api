@@ -63,7 +63,7 @@ exports.handleChat = async (req, res) => {
 
         // 4. Emit SSE (so dashboard sees it too, avoiding refresh)
         if (contact) {
-            sseManager.sendEvent('NEW_MESSAGE', {
+            sseManager.sendEvent(clientPersonaId, 'NEW_MESSAGE', {
                 contactId: contact._id,
                 phoneNumber: userPhone,
                 role: 'owner',

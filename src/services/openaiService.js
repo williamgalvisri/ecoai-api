@@ -3,6 +3,8 @@ const ClientPersona = require('../models/ClientPersona');
 const ChatHistory = require('../models/ChatHistory');
 const Appointment = require('../models/Appointment');
 const Contact = require('../models/Contact');
+const Notification = require('../models/Notification');
+const sseManager = require('../utils/sseManager');
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -374,6 +376,20 @@ async function bookAppointment(dateTime, serviceName, customerPhone, notes, pers
         // Link to Contact
         contact.currentAppointment = savedAppointment._id;
         await contact.save();
+
+        // --- NOTIFICATION & SSE TRIGGER ---
+        const notification = await Notification.create({
+            ownerId: persona._id,
+            type: 'appointment_booked',
+            title: 'Nueva Cita Agendada',
+            message: `El cliente ${contact.name || customerPhone} ha agendado para el ${startTimeFormatted || startDate.toLocaleString()}.`,
+            // Better formatting needed? Using startDate.toLocaleString() for now
+            relatedResourceId: savedAppointment._id
+        });
+
+        // Emit via SSE
+        sseManager.sendEvent(persona._id.toString(), 'NEW_NOTIFICATION', notification);
+        // ----------------------------------
 
         return `Appointment confirmed for ${dateTime} (${duration} mins).`;
     } catch (err) {
