@@ -58,6 +58,33 @@ exports.processIncomingMessage = async (messageObject, phoneNumberId, replyCallb
         );
     }
 
+    // 1.5 HANDLE ORDER MESSAGES
+    let orderContext = null;
+    
+    if (messageObject.type === 'order') {
+        const order = messageObject.order;
+        const catalogId = order.catalog_id;
+        const items = order.product_items || [];
+        
+        let orderSummary = "User sent a shopping cart/order with the following items:\n";
+        items.forEach(item => {
+            orderSummary += `- ${item.quantity}x Product ID: ${item.product_retailer_id} (Price: ${item.item_price} ${item.currency})\n`;
+        });
+        
+        if (order.text) {
+            orderSummary += `User's Note: "${order.text}"`;
+            msgBody = order.text; // Use user's note as the message body if present
+        } else {
+            msgBody = "I just sent you an order."; // Default text if empty
+        }
+
+        console.log('ORDER RECEIVED:', orderSummary);
+        orderContext = orderSummary;
+        
+        // Treat as text so it doesn't get blocked
+        messageObject.type = 'text'; 
+    }
+
     // BLOCK NON-TEXT MEDIA
     if (messageObject.type !== 'text') {
         console.log(`Blocking non-text media: ${messageObject.type}`);
@@ -125,7 +152,8 @@ exports.processIncomingMessage = async (messageObject, phoneNumberId, replyCallb
         // 4. Check Bot Active Status
         if (contact.isBotActive) {
             // Call Service
-            const { text: aiResponseText, usage } = await openaiService.generateResponse(from, msgBody, persona._id);
+            // Pass orderContext if available (it might be null for normal messages)
+            const { text: aiResponseText, usage } = await openaiService.generateResponse(from, msgBody, persona._id, orderContext);
 
             // Save Assistant Response & Audit Log
             const aiMsg = await ChatHistory.create({
@@ -175,6 +203,31 @@ exports.processIncomingMessage = async (messageObject, phoneNumberId, replyCallb
     return 'NO_BODY';
 };
 
+// Helper to send outbound notifications (e.g. status updates)
+exports.sendNotification = async (to, text, persona) => {
+    try {
+        const phoneNumberId = persona.whatsappBussinesConfig.phoneNumberId;
+        const token = persona.whatsappBussinesConfig.token;
+
+        await axios({
+            method: 'POST',
+            url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            data: {
+                messaging_product: 'whatsapp',
+                to: to,
+                text: { body: text },
+            },
+        });
+        console.log(`Notification sent to ${to}: ${text}`);
+    } catch (error) {
+        console.error('Failed to send notification:', error.response ? error.response.data : error.message);
+    }
+};
+
 // Handle Incoming Messages (Web hook entry point)
 exports.handleMessage = async (req, res) => {
     try {
@@ -192,19 +245,8 @@ exports.handleMessage = async (req, res) => {
                 
                 // Define the reply callback for HTTP/Axios
                 const sendReply = async (to, text, persona) => {
-                     await axios({
-                        method: 'POST',
-                        url: `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-                        headers: {
-                            'Authorization': `Bearer ${persona.whatsappBussinesConfig.token}`,
-                            'Content-Type': 'application/json',
-                        },
-                        data: {
-                            messaging_product: 'whatsapp',
-                            to: to,
-                            text: { body: text },
-                        },
-                    });
+                     // Re-use the helper
+                     await exports.sendNotification(to, text, persona);
                 };
 
                 await exports.processIncomingMessage(messageObject, phoneNumberId, sendReply);

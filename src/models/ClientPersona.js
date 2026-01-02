@@ -79,7 +79,28 @@ const ClientPersonaSchema = new mongoose.Schema({
         phoneNumberId: {
             type: String,
             default: ''
+        },
+        // Meta Catalog ID for Product Sync
+        catalogId: {
+            type: String,
+            default: ''
+        },
+        // Meta Business Manager ID
+        businessId: {
+            type: String,
+            default: ''
+        },
+        // WhatsApp Business Account ID (WABA ID)
+        wabaId: {
+            type: String,
+            default: ''
         }
+    },
+    // Agent Type: Determines behavior, prompt, and tools
+    agentType: {
+        type: String,
+        enum: ['scheduler', 'sales', 'customer_support'], // Extensible
+        default: 'scheduler'
     }
 });
 

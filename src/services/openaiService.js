@@ -4,6 +4,8 @@ const ChatHistory = require('../models/ChatHistory');
 const Appointment = require('../models/Appointment');
 const Contact = require('../models/Contact');
 const Notification = require('../models/Notification');
+const Product = require('../models/Product');
+const Order = require('../models/Order'); // Import Order
 const sseManager = require('../utils/sseManager');
 
 const openai = new OpenAI({
@@ -12,12 +14,8 @@ const openai = new OpenAI({
 
 /**
  * Generates a response from OpenAI based on the user's message, history, and the client's persona.
- * @param {string} phoneNumber - The user's phone number.
- * @param {string} messageText - The message from the user.
- * @param {string} ownerId - The ID of the business owner to fetch the persona.
- * @returns {Promise<{text: string, usage: object}>} - The AI's response and token usage.
  */
-async function generateResponse(phoneNumber, messageText, ownerId) {
+async function generateResponse(phoneNumber, messageText, ownerId, orderContext = null) {
     try {
         // 1. Identify/Create Contact
         let contact = await Contact.findOne({ phoneNumber });
@@ -25,13 +23,12 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
             contact = await Contact.create({ phoneNumber, ownerId });
         }
 
-        // Populating reference to current appointment if exists
+        // Populating referzence to current appointment if exists
         if (contact.currentAppointment) {
             await contact.populate('currentAppointment');
         }
 
         // 2. Fetch Client Persona
-        // Assuming ownerId is passed or determined upstream
         const persona = await ClientPersona.findOne({ _id: ownerId });
 
         if (!persona) {
@@ -49,17 +46,21 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
             content: msg.content,
         }));
 
-        // 4. Construct System Prompt
-        let systemPrompt = "You are a helpful assistant.";
-        if (persona) {
-            const examples = persona.responseExamples.map(ex => `User: ${ex.userMessage}\nYou: ${ex.idealResponse}`).join('\n');
+        // === AGENT TYPE SWITCH ===
+        const agentType = persona?.agentType || 'scheduler';
 
-            // Format Services
+        let systemPrompt = "";
+        let tools = [];
+        let availableFunctions = {};
+
+        if (agentType === 'scheduler') {
+            // === SCHEDULER LOGIC (Keep existing) ===
+            const location = persona.businessContext?.location || 'Not specified';
+            const contactPhone = persona.businessContext?.contactPhone || '';
             const servicesList = persona.businessContext?.services?.map(s =>
                 `- ${s.name} ($${s.price || '?'})${s.duration ? `, ${s.duration} mins` : ''}${s.description ? `: ${s.description}` : ''}`
             ).join('\n') || 'No specific services listed.';
-
-            // Format Hours
+            
             const hoursObj = persona.businessContext?.hours;
             let hoursStr = "Hours not specified.";
             if (hoursObj) {
@@ -70,13 +71,11 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
                 }).join('\n');
             }
 
-            const location = persona.businessContext?.location || 'Not specified';
-            const contactPhone = persona.businessContext?.contactPhone || '';
-
             const defaultDuration = persona.appointmentSettings?.defaultDuration || 30;
             const bufferTime = persona.appointmentSettings?.bufferTime || 5;
 
-            systemPrompt = `### 1. ROLE & IDENTITY
+            // ... (Scheduler Prompt Construction) ...
+             systemPrompt = `### 1. ROLE & IDENTITY
             You are ${persona.botName}. Your tone is ${persona.toneDescription}.
             Use these keywords naturally: ${persona.keywords.join(', ')}.
             Use these fillers occasionally: ${persona.fillers.join(', ')}.
@@ -132,111 +131,258 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
             - NEVER book without confirming the Service and Price first.
 
             ### 6. FEW-SHOT EXAMPLES
-            ${examples}`;
-        }
+            ${persona.responseExamples.map(ex => `User: ${ex.userMessage}\nYou: ${ex.idealResponse}`).join('\n')}`;
 
-        // 5. Define Tools
-        const tools = [
-            {
-                type: "function",
-                function: {
-                    name: "checkAvailability",
-                    description: "Check availability for a specific date and time. If busy, returns alternative free slots for that day.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            dateTime: {
-                                type: "string",
-                                description: "The date and time to check (ISO 8601 format or compatible string).",
+            tools = [
+                {
+                    type: "function",
+                    function: {
+                        name: "checkAvailability",
+                        description: "Check availability for a specific date and time.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                dateTime: { type: "string", description: "ISO 8601 format" }
                             },
-                        },
-                        required: ["dateTime"],
-                    },
+                            required: ["dateTime"]
+                        }
+                    }
                 },
-            },
-            {
-                type: "function",
-                function: {
-                    name: "bookAppointment",
-                    description: "Book an appointment for the client at a specific date and time.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            dateTime: {
-                                type: "string",
-                                description: "The date and time of the appointment (ISO 8601 format or compatible string).",
+                {
+                    type: "function",
+                    function: {
+                        name: "bookAppointment",
+                        description: "Book an appointment.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                dateTime: { type: "string" },
+                                serviceName: { type: "string" },
+                                notes: { type: "string" }
                             },
-                            serviceName: {
-                                type: "string",
-                                description: "The name of the service being booked (e.g., 'Haircut').",
-                            },
-                            notes: {
-                                type: "string",
-                                description: "Any special requests or notes from the customer.",
-                            },
-                        },
-                        required: ["dateTime", "serviceName"],
-                    },
+                            required: ["dateTime", "serviceName"]
+                        }
+                    }
                 },
-            },
-            {
-                type: "function",
-                function: {
-                    name: "updateContactName",
-                    description: "Update the user's name if they provide it during the conversation.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            name: {
-                                type: "string",
-                                description: "The name the user provided.",
-                            },
-                        },
-                        required: ["name"],
-                    },
+                {
+                    type: "function",
+                    function: {
+                        name: "updateContactName",
+                        description: "Update the user's name.",
+                        parameters: {
+                            type: "object",
+                            properties: { name: { type: "string" } },
+                            required: ["name"]
+                        }
+                    }
                 },
-            },
-            {
-                type: "function",
-                function: {
-                    name: "cancelAppointment",
-                    description: "Cancel the user's upcoming appointment.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            reason: {
-                                type: "string",
-                                description: "Reason for cancellation (optional).",
-                            },
-                        },
-                    },
+                {
+                    type: "function",
+                    function: {
+                        name: "cancelAppointment",
+                        description: "Cancel the user's upcoming appointment.",
+                        parameters: {
+                            type: "object",
+                            properties: { reason: { type: "string" } }
+                        }
+                    }
                 },
-            },
-            {
-                type: "function",
-                function: {
-                    name: "rescheduleAppointment",
-                    description: "Reschedule the user's existing appointment to a new time.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            newDateTime: {
-                                type: "string",
-                                description: "The new date and time requested (ISO 8601).",
-                            },
-                        },
-                        required: ["newDateTime"],
-                    },
+                {
+                    type: "function",
+                    function: {
+                        name: "rescheduleAppointment",
+                        description: "Reschedule appointment.",
+                        parameters: {
+                            type: "object",
+                            properties: { newDateTime: { type: "string" } },
+                            required: ["newDateTime"]
+                        }
+                    }
+                }
+            ];
+
+            availableFunctions = {
+                checkAvailability: async (args) => await checkAvailability(args.dateTime, persona),
+                bookAppointment: async (args) => await bookAppointment(args.dateTime, args.serviceName, phoneNumber, args.notes, persona),
+                updateContactName: async (args) => {
+                    await Contact.updateOne({ phoneNumber }, { name: args.name });
+                    return JSON.stringify({ success: true, message: `Updated name to ${args.name}` });
                 },
-            },
-        ];
+                cancelAppointment: async (args) => await cancelAppointment(phoneNumber, args.reason),
+                rescheduleAppointment: async (args) => await rescheduleAppointment(phoneNumber, args.newDateTime, persona)
+            };
+
+        } else if (agentType === 'sales') {
+            // === SALES LOGIC ===
+            
+            systemPrompt = `### ROLE: SALES AGENT
+            You are ${persona.botName}, a helpful sales assistant. Your tone is ${persona.toneDescription}.
+            
+            ### GOAL
+            Help the customer find products in our catalog and place an order.
+            The user's name is "${contact.name !== 'Unknown' ? contact.name : 'Unknown'}".
+            
+            ### CATALOG
+            You have access to a product catalog. 
+            - If the user asks for products, use 'searchProducts'.
+            - If the user asks for price, use 'searchProducts'.
+            - If the user wants to buy, use 'createOrder' (simulated).
+            
+            ### RULES
+            1. **Be Concise**: WhatsApp messages should be short.
+            2. **Proactive**: If they ask for "shirts", search for shirts and show them the list with prices.
+            3. **Closing**: If they express interest, ask if they want to add to cart or order.
+            4. **Missing Name**: If name is Unknown, ask for it politely before finalizing an order.
+            
+            ### CONTEXT
+            Current Date: ${new Date().toLocaleString()}`;
+
+             tools = [
+                {
+                    type: "function",
+                    function: {
+                        name: "searchProducts",
+                        description: "Search for products in the catalog by keyword.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                keyword: { type: "string", description: "Product name or category to search" }
+                            },
+                            required: ["keyword"]
+                        }
+                    }
+                },
+                 {
+                    type: "function",
+                    function: {
+                        name: "updateContactName",
+                        description: "Update the user's name.",
+                        parameters: {
+                            type: "object",
+                            properties: { name: { type: "string" } },
+                            required: ["name"]
+                        }
+                    }
+                },
+                // Placeholder for real order creation or cart
+                {
+                    type: "function",
+                    function: {
+                        name: "createOrder",
+                        description: "Create a draft order for the user.",
+                        parameters: {
+                             type: "object",
+                             properties: {
+                                 items: { 
+                                     type: "array", 
+                                     items: { type: "string", description: "List of product names or IDs" } 
+                                 },
+                                 deliveryAddress: { type: "string" }
+                             },
+                             required: ["items"]
+                        }
+                    }
+                }
+            ];
+
+             availableFunctions = {
+                searchProducts: async (args) => {
+                    console.log('Searching products for:', args.keyword);
+                    // Search in local DB (synced with Meta)
+                    const products = await Product.find({
+                        ownerId: persona._id,
+                        name: { $regex: args.keyword, $options: 'i' }
+                    }).limit(5);
+
+                    if (products.length === 0) return "No products found matching that keyword.";
+                    
+                    return JSON.stringify(products.map(p => ({
+                        name: p.name,
+                        price: p.price,
+                        currency: p.currency,
+                        availability: p.availability
+                    })));
+                },
+                updateContactName: async (args) => {
+                    await Contact.updateOne({ phoneNumber }, { name: args.name });
+                    return JSON.stringify({ success: true, message: `Updated name to ${args.name}` });
+                },
+                createOrder: async (args) => {
+                    console.log('Creating Order with args:', args);
+                    const orderItems = [];
+                    let totalAmount = 0;
+
+                    for (const item of args.items) {
+                        const regex = new RegExp(item.productIdentifier, 'i');
+                        // Try matching by retailerId (exact) OR name (fuzzy)
+                        const product = await Product.findOne({
+                            ownerId: persona._id,
+                            $or: [{ retailerId: item.productIdentifier }, { name: regex }]
+                        });
+
+                        if (product) {
+                             const qty = item.quantity || 1;
+                             orderItems.push({
+                                 productId: product.retailerId,
+                                 name: product.name,
+                                 quantity: qty,
+                                 price: product.price,
+                                 currency: product.currency
+                             });
+                             totalAmount += (product.price * qty);
+                        } else {
+                             // Fallback for unknown items
+                             orderItems.push({
+                                 productId: 'UNKNOWN',
+                                 name: item.productIdentifier,
+                                 quantity: item.quantity || 1,
+                                 price: 0,
+                                 currency: 'COP'
+                             });
+                        }
+                    }
+
+                    if (orderItems.length === 0 && args.items.length > 0) {
+                         return "Could not identify any valid products to order. Please refine your search.";
+                    }
+
+                    const newOrder = await Order.create({
+                        ownerId: persona._id,
+                        contactId: contact._id,
+                        items: orderItems,
+                        totalAmount: totalAmount,
+                        currency: 'COP',
+                        deliveryAddress: args.deliveryAddress || 'Not provided',
+                        paymentMethod: args.paymentMethod || 'Not provided',
+                        status: 'pending'
+                    });
+
+                    // NOTIFY OWNER via SSE
+                    sseManager.sendEvent(persona._id.toString(), 'NEW_ORDER', newOrder);
+
+                    return JSON.stringify({
+                        success: true,
+                        message: `Order #${newOrder._id} created successfully. Total: $${totalAmount}. Status: Pending.`
+                    });
+                }
+            };
+        }
 
         // 5. Call OpenAI (Loop for sequential tool calls)
         let messages = [
             { role: "system", content: systemPrompt },
-            ...conversationHistory,
-            { role: "user", content: messageText },
+            ...conversationHistory
         ];
+
+        // INJECT ORDER CONTEXT
+        if (orderContext) {
+            messages.push({ 
+                role: "system", 
+                content: `[SYSTEM PRIORITY] The user just sent a structured WhatsApp Cart/Order. Details:\n${orderContext}\n\nINSTRUCTIONS:\n1. Acknowledge the items.\n2. Calculate the total (if strictly clear from context) or confirm it.\n3. ASK FOR MISSING DELIVERY DETAILS (Address, Payment Method) to finalize the order.` 
+            });
+        }
+        
+        messages.push({ role: "user", content: messageText });
 
         let totalUsage = {
             prompt_tokens: 0,
@@ -277,39 +423,19 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
             if (responseMessage.tool_calls) {
                 messages.push(responseMessage); // Add assistant's tool-call request to history
 
-                const availableFunctions = {
-                    checkAvailability: async (args) => {
-                        console.log('running checkAvailability tool');
-                        // Pass persona to checkAvailability for hours/settings context
-                        const availability = await checkAvailability(args.dateTime, persona);
-                        return availability;
-                    },
-                    bookAppointment: async (args) => {
-                        console.log('running bookAppointment tool');
-                        return await bookAppointment(args.dateTime, args.serviceName, phoneNumber, args.notes, persona);
-                    },
-                    updateContactName: async (args) => {
-                        console.log('running updateContactName tool');
-                        await Contact.updateOne({ phoneNumber }, { name: args.name });
-                        return JSON.stringify({ success: true, message: `Contact name updated to ${args.name}` });
-                    },
-                    cancelAppointment: async (args) => {
-                        console.log('running cancelAppointment tool');
-                        return await cancelAppointment(phoneNumber, args.reason);
-                    },
-                    rescheduleAppointment: async (args) => {
-                        console.log('running rescheduleAppointment tool');
-                        return await rescheduleAppointment(phoneNumber, args.newDateTime, persona);
-                    }
-                };
-
                 for (const toolCall of responseMessage.tool_calls) {
                     const functionName = toolCall.function.name;
                     const functionToCall = availableFunctions[functionName];
                     const functionArgs = JSON.parse(toolCall.function.arguments);
 
                     // Execute the function
-                    const functionResponse = await functionToCall(functionArgs);
+                    // Handle missing tools gracefully
+                    let functionResponse = "Tool execution failed.";
+                    if (functionToCall) {
+                         functionResponse = await functionToCall(functionArgs);
+                    } else {
+                         console.error(`Tool ${functionName} not found in availableFunctions for agentType ${agentType}`);
+                    }
 
                     messages.push({
                         tool_call_id: toolCall.id,
@@ -332,7 +458,7 @@ async function generateResponse(phoneNumber, messageText, ownerId) {
 
     } catch (error) {
         console.error("Error in generateResponse:", error);
-        return "Sorry, I'm having trouble processing your request right now.";
+        return { text: "Sorry, I'm having trouble processing your request right now.", usage: {} };
     }
 }
 
@@ -571,8 +697,6 @@ async function checkAvailability(dateTime, persona) {
     }
 }
 
-module.exports = { generateResponse };
-
 async function cancelAppointment(phoneNumber, reason) {
     try {
         const contact = await Contact.findOne({ phoneNumber }).populate('currentAppointment');
@@ -633,3 +757,5 @@ async function rescheduleAppointment(phoneNumber, newDateTime, persona) {
         return "Failed to reschedule appointment.";
     }
 }
+module.exports = { generateResponse };
+

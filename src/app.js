@@ -7,6 +7,9 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const sseRoutes = require('./routes/sseRoutes');
 const authRoutes = require('./routes/authRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const productRoutes = require('./routes/productRoutes');
+const onboardingRoutes = require('./routes/onboardingRoutes');
+const orderRoutes = require('./routes/orderRoutes');
 
 const app = express();
 
@@ -21,6 +24,9 @@ app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/onboarding', onboardingRoutes);
+app.use('/api/orders', orderRoutes);
 app.use('/api', sseRoutes);
 
 // Health Check
