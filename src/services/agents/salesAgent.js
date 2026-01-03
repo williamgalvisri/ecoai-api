@@ -179,12 +179,14 @@ const salesAgent = {
                 return JSON.stringify({ success: true, message: `Updated name to ${args.name}` });
             },
             createOrder: async (args) => {
-                console.log('Creating Order with args:', args);
+                console.log('--- DEBUG: createOrder CALLED ---');
+                console.log('Args:', JSON.stringify(args, null, 2));
                 const orderItems = [];
                 let totalAmount = 0;
 
                 for (const item of args.items) {
                     const identifier = (typeof item === 'object' && item.productIdentifier) ? item.productIdentifier : item;
+                    console.log(`Looking up product for identifier: "${identifier}"`);
                     const regex = new RegExp(identifier, 'i');
                     
                     const product = await Product.findOne({
@@ -193,6 +195,7 @@ const salesAgent = {
                     });
 
                     if (product) {
+                        console.log(`FOUND product: ${product.name}, Price: ${product.price}`);
                         const qty = (typeof item === 'object' && item.quantity) ? item.quantity : 1;
                         
                         orderItems.push({
@@ -204,6 +207,7 @@ const salesAgent = {
                         });
                         totalAmount += (product.price * qty);
                     } else {
+                        console.log(`NOT FOUND product for: "${identifier}". Defaulting to $0.`);
                         const qty = (typeof item === 'object' && item.quantity) ? item.quantity : 1;
                         orderItems.push({
                             productId: 'UNKNOWN',
@@ -230,6 +234,7 @@ const salesAgent = {
                     status: 'pending'
                 });
 
+                console.log(`Order created: ${newOrder._id}, Total: ${totalAmount}`);
                 sseManager.sendEvent(persona._id.toString(), 'NEW_ORDER', newOrder);
 
                 return JSON.stringify({
@@ -238,11 +243,19 @@ const salesAgent = {
                 });
             },
             updateOrderPaymentMethod: async (args) => {
+                console.log('--- DEBUG: updateOrderPaymentMethod CALLED ---');
+                console.log('Args:', JSON.stringify(args, null, 2));
+
                 const order = await Order.findOne({ contactId: contact._id, status: 'pending' }).sort({ createdAt: -1 });
-                if (!order) return "No pending order found to update.";
+                if (!order) {
+                    console.log('No pending order found for this contact.');
+                    return "No pending order found to update.";
+                }
                 
                 order.paymentMethod = args.paymentMethod;
                 await order.save();
+                console.log(`Payment method updated for order ${order._id} to ${args.paymentMethod}`);
+                
                 return `Payment method updated to ${args.paymentMethod}. ${args.paymentMethod === 'transfer' ? 'Waiting for proof.' : 'Order confirmed.'}`;
             },
             registerPaymentProof: async (args) => {
