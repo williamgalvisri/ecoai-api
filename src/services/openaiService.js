@@ -151,7 +151,7 @@ async function generateResponse(phoneNumber, messageText, ownerId, orderContext 
 
     } catch (error) {
         console.error("Error in generateResponse:", error);
-        return { text: "Sorry, I'm having trouble processing your request right now.", usage: {} };
+        return { text: "Lo siento, tengo problemas para procesar tu solicitud en este momento.", usage: {} };
     }
 }
 
