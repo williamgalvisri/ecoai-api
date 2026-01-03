@@ -225,7 +225,7 @@ const salesAgent = {
                     items: orderItems,
                     totalAmount: totalAmount,
                     currency: 'COP',
-                    deliveryAddress: args.deliveryAddress || 'Not provided',
+                    deliveryAddress: args.deliveryAddress || 'not_specified',
                     paymentMethod: 'not_specified',
                     status: 'pending'
                 });
